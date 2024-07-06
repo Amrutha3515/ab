@@ -1,23 +1,35 @@
 module iiitb_rv32i_tb;
 
-reg clk,RN;
-wire [31:0]WB_OUT,NPC;
+    // Inputs
+    reg clk, RN;
 
-iiitb_rv32i rv32(clk,RN,NPC,WB_OUT);
+    // Outputs
+    wire [31:0] WB_OUT, NPC;
 
+    // Instantiate the Unit Under Test (UUT)
+    iiitb_rv32i rv32 (
+        .clk(clk),
+        .RN(RN),
+        .NPC(NPC),
+        .WB_OUT(WB_OUT)
+    );
 
-always #3 clk=!clk;
+    // Clock generation
+    always #3 clk = ~clk;
 
-initial begin 
-RN  = 1'b1;
-clk = 1'b1;
+    // Test stimulus
+    initial begin
+        // Initialize Inputs
+        RN = 1'b1;
+        clk = 1'b1;
 
-$dumpfile ("iiitb_rv32i.vcd"); //by default vcd
-$dumpvars (0, iiitb_rv32i_tb);
-  
-  #5 RN = 1'b0;
-  
-  #300 $finish;
+        // Initialize VCD dump
+        $dumpfile("iiitb_rv32i.vcd");
+        $dumpvars(0, iiitb_rv32i_tb);
 
-end
-endmodule
+        // Release reset
+        #5 RN = 1'b0;
+
+        // Run simulation for 300 time units
+        #300 $finish;
+   

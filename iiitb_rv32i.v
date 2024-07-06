@@ -1,329 +1,162 @@
-module iiitb_rv32i(clk,RN,NPC,WB_OUT);
-input clk;
-input RN;
-//input EN;
-integer k;
-wire  EX_MEM_COND ;
+module simple_riscv_processor(
+  input clk,
+  input reset,
+  // Instruction memory interface
+  output reg [31:0] instruction_address,
+  input [31:0] instruction_data,
+  // Data memory interface
+  output reg [31:0] data_address,
+  input  [31:0] data_read_data,
+  output reg data_write_enable,
+  output reg [31:0] data_write_data
+);
 
-reg 
-BR_EN;
+  // Register file
+  reg [31:0] register_file[31:0];
 
-//I_FETCH STAGE
-reg[31:0] 
-IF_ID_IR,
-IF_ID_NPC;                                
+  // Program counter (PC)
+  reg [31:0] pc;
 
-//I_DECODE STAGE
-reg[31:0] 
-ID_EX_A,
-ID_EX_B,
-ID_EX_RD,
-ID_EX_IMMEDIATE,
-ID_EX_IR,ID_EX_NPC;      
+  // Control signals
+  reg [2:0] alu_op;
+  reg [1:0] mem_op;
+  reg reg_write_enable;
+  reg branch;
 
-//EXECUTION STAGE
-reg[31:0] 
-EX_MEM_ALUOUT,
-EX_MEM_B,EX_MEM_IR;                        
+  // Temporary registers for pipeline stages
+  reg [31:0] reg1, reg2, immediate, rd, rs1, rs2;
 
-parameter 
-ADD=3'd0,
-SUB=3'd1,
-AND=3'd2,
-OR=3'd3,
-XOR=3'd4,
-SLT=3'd5,
+  parameter RESET_VALUE = 32'h0;
+  parameter ALU_ADD = 3'b000;
+  parameter ALU_SUB = 3'b001;
+  parameter ALU_AND = 3'b010;
+  parameter ALU_OR  = 3'b011;
+  parameter ALU_XOR = 3'b100;
+  parameter ALU_SLT = 3'b101;
+  parameter MEM_READ = 2'b00;
+  parameter MEM_WRITE = 2'b01;
 
-ADDI=3'd0,
-SUBI=3'd1,
-ANDI=3'd2,
-ORI=3'd3,
-XORI=3'd4,
+  // Reset initialization
+  always @(posedge reset) begin
+    pc <= RESET_VALUE;
+    register_file <= 'b0; // Initialize all registers to 0
+  end
 
-LW=3'd0,
-SW=3'd1,
-
-BEQ=3'd0,
-BNE=3'd1,
-
-SLL=3'd0,
-SRL=3'd1;
-
-
-parameter 
-AR_TYPE=7'd0,
-M_TYPE=7'd1,
-BR_TYPE=7'd2,
-SH_TYPE=7'd3;
-
-
-//MEMORY STAGE
-reg[31:0] 
-MEM_WB_IR,
-MEM_WB_ALUOUT,
-MEM_WB_LDM;                      
-
-
-output reg [31:0]WB_OUT,NPC;
-
-//REG FILE
-reg [31:0]REG[0:31];                                               
-//64*32 IMEM
-reg [31:0]MEM[0:31];                                             
-//64*32 DMEM
-reg [31:0]DM[0:31];   
-
-
-//assign EX_MEM_COND = (EX_MEM_IR[6:0]==BR_TYPE) ? 1'b1 : 1'b0;
-                     //1'b1 ? (ID_EX_A!=ID_EX_RD) : 1'b0;
-
-always @(posedge clk or posedge RN) begin
-    if(RN) begin
-    NPC<= 32'd0;
-    //EX_MEM_COND <=1'd0;
-    BR_EN<= 1'd0; 
-    REG[0] <= 32'h00000000;
-    REG[1] <= 32'd1;
-    REG[2] <= 32'd2;
-    REG[3] <= 32'd3;
-    REG[4] <= 32'd4;
-    REG[5] <= 32'd5;
-    REG[6] <= 32'd6;
+  // Instruction fetch
+  always @(posedge clk) begin
+    if (reset) begin
+      instruction_address <= RESET_VALUE;
+    end else begin
+      instruction_address <= pc;
     end
-    //else if(EX_MEM_COND)
-    //NPC <= EX_MEM_ALUOUT;
+  end
 
-    //else if (EX_MEM_COND)begin
-    //NPC = EX_MEM_COND ? EX_MEM_ALUOUT : NPC +32'd1;
-    //NPC <= EX_MEM_ALUOUT;
-    //EX_MEM_COND = BR_EN;
-    //NPC = BR_EN ? EX_MEM_ALUOUT : NPC +32'd1;
-    //BR_EN = 1'd0;
-    //EX_MEM_COND <= 1'd0;
-    //end
-    else begin
-    NPC <= BR_EN ? EX_MEM_ALUOUT : NPC +32'd1;
-    BR_EN <= 1'd0;
-    //NPC <= NPC +32'd1;
-    //EX_MEM_COND <=1'd0;
-    IF_ID_IR <=MEM[NPC];
-    IF_ID_NPC <=NPC+32'd1;
+  // Instruction decode
+  always @(posedge clk) begin
+    if (reset) begin
+      reg1 <= RESET_VALUE;
+      reg2 <= RESET_VALUE;
+      immediate <= RESET_VALUE;
+      rd <= RESET_VALUE;
+      rs1 <= RESET_VALUE;
+      rs2 <= RESET_VALUE;
+    end else begin
+      // Extract instruction fields
+      rd <= instruction_data[11:7];
+      rs1 <= instruction_data[19:15];
+      rs2 <= instruction_data[24:20];
+      immediate <= {{20{instruction_data[31]}}, instruction_data[31:20]};
+
+      // Decode control signals
+      case (instruction_data[6:0])
+        7'b0110011: begin // R-type (ADD, SUB, AND, OR, XOR, SLT)
+          case (instruction_data[14:12])
+            3'b000: alu_op <= (instruction_data[30] ? ALU_SUB : ALU_ADD);
+            3'b111: alu_op <= ALU_AND;
+            3'b110: alu_op <= ALU_OR;
+            3'b100: alu_op <= ALU_XOR;
+            3'b010: alu_op <= ALU_SLT;
+            default: alu_op <= ALU_ADD;
+          endcase
+          mem_op <= MEM_READ;
+          reg_write_enable <= 1'b1;
+          branch <= 1'b0;
+        end
+        7'b0010011: begin // I-type (ADDI)
+          alu_op <= ALU_ADD;
+          mem_op <= MEM_READ;
+          reg_write_enable <= 1'b1;
+          branch <= 1'b0;
+        end
+        7'b0000011: begin // Load
+          alu_op <= ALU_ADD;
+          mem_op <= MEM_READ;
+          reg_write_enable <= 1'b1;
+          branch <= 1'b0;
+        end
+        7'b0100011: begin // Store
+          alu_op <= ALU_ADD;
+          mem_op <= MEM_WRITE;
+          reg_write_enable <= 1'b0;
+          branch <= 1'b0;
+        end
+        7'b1100011: begin // Branch (BEQ)
+          alu_op <= ALU_SUB;
+          mem_op <= MEM_READ;
+          reg_write_enable <= 1'b0;
+          branch <= 1'b1;
+        end
+        default: begin
+          alu_op <= ALU_ADD;
+          mem_op <= MEM_READ;
+          reg_write_enable <= 1'b0;
+          branch <= 1'b0;
+        end
+      endcase
+
+      // Read registers
+      reg1 <= register_file[rs1];
+      reg2 <= register_file[rs2];
     end
-end
+  end
 
-always @(posedge RN) begin
-    //NPC<= 32'd0;
-MEM[0] <= 32'h002080b3; // ADD r1, r2, r3
-    MEM[1] <= 32'h40208033; // SUB r3, r1, r2
-    MEM[2] <= 32'h0020b0b3; // AND r2, r1, r3
-    MEM[3] <= 32'h00a28333; // OR r8, r2, r5
-    MEM[4] <= 32'h00e282b3; // XOR r8, r1, r4
-    MEM[5] <= 32'h0242a2b3; // SLT r10, r2, r4
-    MEM[6] <= 32'h005184b3; // ADDI r12, r3, 5
-    MEM[7] <= 32'h00312023; // SW r3, 4(r1)
-    MEM[8] <= 32'h00b595b3; // SRL r16, r11, r2
-    MEM[9] <= 32'h00010163; // BNE r0, r1, 20
-    MEM[10] <= 32'h00000063; // BEQ r0, r0, 15
-    MEM[11] <= 32'h00b68083; // LW r13, 2(r11)
-    MEM[12] <= 32'h00b5d5b3; // SLL r15, r11, r2
+  // Execute
+  always @(posedge clk) begin
+    if (reset) begin
+      // Reset signals
+    end else begin
+      case (alu_op)
+        ALU_ADD: data_write_data <= reg1 + (branch ? immediate : reg2);
+        ALU_SUB: data_write_data <= reg1 - reg2;
+        ALU_AND: data_write_data <= reg1 & reg2;
+        ALU_OR:  data_write_data <= reg1 | reg2;
+        ALU_XOR: data_write_data <= reg1 ^ reg2;
+        ALU_SLT: data_write_data <= (reg1 < reg2) ? 32'b1 : 32'b0;
+        default: data_write_data <= 32'b0;
+      endcase
 
-//for(k=0;k<=31;k++)
-//REG[k]<=k;
-/*REG[0] <= 32'h00000000;
-REG[1] <= 32'd1;
-REG[2] <= 32'd2;
-REG[3] <= 32'd3;
-REG[4] <= 32'd4;
-REG[5] <= 32'd5;
-REG[6] <= 32'd6;
-REG[7] = 32'd7;
-REG[6] = 32'd6;
-REG[7] = 32'd7;
-REG[8] = 32'd8;
-REG[9] = 32'd9;
-REG[10] = 32'd10;
-REG[11] = 32'd11;
-REG[12] = 32'd12;
-REG[13] = 32'd13;
-REG[14] = 32'd14;
-REG[15] = 32'd15;
-REG[16] = 32'd16;
-REG[17] = 32'd17;*/
-/*end
-else begin
-    if(EX_MEM_COND==1 && EX_MEM_IR[6:0]==BR_TYPE) begin
-    NPC=EX_MEM_ALUOUT;
-    IF_ID=MEM[NPC];
+      // Set data memory address
+      data_address <= reg1 + immediate;
+
+      // Set write enable for data memory
+      data_write_enable <= (mem_op == MEM_WRITE);
     end
+  end
 
-    else begin
-    NPC<=NPC+32'd1;
-    IF_ID<=MEM[NPC];
-    IF_ID_NPC<=NPC+32'd1;
+  // Memory access and write-back
+  always @(posedge clk) begin
+    if (reset) begin
+      // Reset signals
+    end else begin
+      if (reg_write_enable) begin
+        register_file[rd] <= (mem_op == MEM_READ) ? data_read_data : data_write_data;
+      end
+      if (branch && data_write_data == 32'b0) begin
+        pc <= pc + immediate;
+      end else begin
+        pc <= pc + 4;
+      end
     end
-end*/
-end
-//I_FECT STAGE
-
-/*always @(posedge clk) begin
-
-//NPC <= rst ? 32'd0 : NPC+32'd1;
-
-if(EX_MEM_COND==1 && EX_MEM_IR[6:0]==BR_TYPE) begin
-NPC=EX_MEM_ALUOUT;
-IF_ID=MEM[NPC];
-end
-
-else begin
-NPC<=NPC+32'd1;
-IF_ID<=MEM[NPC];
-IF_ID_NPC<=NPC+32'd1;
-end
-end*/
-
-
-//FETCH STAGE END
-
-//I_DECODE STAGE 
-always @(posedge clk) begin
-
-ID_EX_A <= REG[IF_ID_IR[19:15]];
-ID_EX_B <= REG[IF_ID_IR[24:20]];
-ID_EX_RD <= REG[IF_ID_IR[11:7]];
-ID_EX_IR <= IF_ID_IR;
-ID_EX_IMMEDIATE <= {{20{IF_ID_IR[31]}},IF_ID_IR[31:20]};
-ID_EX_NPC<=IF_ID_NPC;
-end
-//DECODE STAGE END
-
-/*always@(posedge clk) begin
-if(ID_EX_IR[6:0]== BR_TYPE)
-EX_MEM_COND <= EN;
-else
-EX_MEM_COND <= !EN;
-end*/
-
-
-//EXECUTION STAGE
-
-always@(posedge clk) begin
-
-EX_MEM_IR <=  ID_EX_IR;
-//EX_MEM_COND <= (ID_EX_IR[6:0] == BR_TYPE) ? 1'd1 :1'd0;
-
-
-case(ID_EX_IR[6:0])
-
-AR_TYPE:begin
-    if(ID_EX_IR[31:25]== 7'd1)begin
-    case(ID_EX_IR[14:12])
-
-    ADD:EX_MEM_ALUOUT <= ID_EX_A + ID_EX_B;
-    SUB:EX_MEM_ALUOUT <= ID_EX_A - ID_EX_B;
-    AND:EX_MEM_ALUOUT <= ID_EX_A & ID_EX_B;
-    OR :EX_MEM_ALUOUT <= ID_EX_A | ID_EX_B;
-    XOR:EX_MEM_ALUOUT <= ID_EX_A ^ ID_EX_B;
-    SLT:EX_MEM_ALUOUT <= (ID_EX_A < ID_EX_B) ? 32'd1 : 32'd0;
-
-    endcase
-    end
-    else begin
-        case(ID_EX_IR[14:12])
-        ADDI:EX_MEM_ALUOUT <= ID_EX_A + ID_EX_IMMEDIATE;
-        SUBI:EX_MEM_ALUOUT <= ID_EX_A - ID_EX_IMMEDIATE;
-        ANDI:EX_MEM_ALUOUT <= ID_EX_A & ID_EX_B;
-        ORI:EX_MEM_ALUOUT  <= ID_EX_A | ID_EX_B;
-        XORI:EX_MEM_ALUOUT <= ID_EX_A ^ ID_EX_B;
-        endcase
-    end
-
-end
-
-M_TYPE:begin
-    case(ID_EX_IR[14:12])
-    LW  :EX_MEM_ALUOUT <= ID_EX_A + ID_EX_IMMEDIATE;
-    SW  :EX_MEM_ALUOUT <= ID_EX_IR[24:20] + ID_EX_IR[19:15];
-    endcase
-end
-
-BR_TYPE:begin
-    case(ID_EX_IR[14:12])
-    BEQ:begin 
-    EX_MEM_ALUOUT <= ID_EX_NPC+ID_EX_IMMEDIATE;
-    BR_EN <= 1'd1 ? (ID_EX_IR[19:15] == ID_EX_IR[11:7]) : 1'd0;
-    //BR_PC = EX_MEM_COND ? EX_MEM_ALUOUT : 1'd0; 
-end
-BNE:begin 
-    EX_MEM_ALUOUT <= ID_EX_NPC+ID_EX_IMMEDIATE;
-    BR_EN <= (ID_EX_IR[19:15] != ID_EX_IR[11:7]) ? 1'd1 : 1'd0;
-end
-endcase
-end
-
-SH_TYPE:begin
-case(ID_EX_IR[14:12])
-SLL:EX_MEM_ALUOUT <= ID_EX_A << ID_EX_B;
-SRL:EX_MEM_ALUOUT <= ID_EX_A >> ID_EX_B;
-endcase
-end
-
-endcase
-end
-
-
-//EXECUTION STAGE END
-		
-//MEMORY STAGE
-always@(posedge clk) begin
-
-MEM_WB_IR <= EX_MEM_IR;
-
-case(EX_MEM_IR[6:0])
-
-AR_TYPE:MEM_WB_ALUOUT <=  EX_MEM_ALUOUT;
-SH_TYPE:MEM_WB_ALUOUT <=  EX_MEM_ALUOUT;
-
-M_TYPE:begin
-case(EX_MEM_IR[14:12])
-LW:MEM_WB_LDM <= DM[EX_MEM_ALUOUT];
-SW:DM[EX_MEM_ALUOUT]<=REG[EX_MEM_IR[11:7]];
-endcase
-end
-
-endcase
-end
-
-// MEMORY STAGE END
-
-
-//WRITE BACK STAGE
-always@(posedge clk) begin
-
-case(MEM_WB_IR[6:0])
-
-AR_TYPE:begin 
-WB_OUT<=MEM_WB_ALUOUT;
-REG[MEM_WB_IR[11:7]]<=MEM_WB_ALUOUT;
-end
-
-SH_TYPE:begin
-WB_OUT<=MEM_WB_ALUOUT;
-REG[MEM_WB_IR[11:7]]<=MEM_WB_ALUOUT;
-end
-
-M_TYPE:begin
-case(MEM_WB_IR[14:12])
-LW:begin
-WB_OUT<=MEM_WB_LDM;
-REG[MEM_WB_IR[11:7]]<=MEM_WB_LDM;
-end
-endcase
-end
-
-
-
-endcase
-end
-//WRITE BACK STAGE END
+  end
 
 endmodule
